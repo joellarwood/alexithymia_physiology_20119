@@ -13,121 +13,128 @@ source("code/apa_f.r")
 
 # Import Data -------------------------------------------------------------
 
-corr_all <-here::here(
+data <-here::here(
   "data",
   "all_data.Rds"
 ) %>%
-  read_rds() %>%
-  mutate(
-    liking = liking - 3
-  ) 
+  read_rds() 
 
 corr_log <- here::here(
   "data",
   "log.csv"
 ) %>%
   read_csv() %>%
-  rename(
-    pid = P
+  mutate(
+    pid = as.factor(P)
   ) %>% 
   filter(
     grepl("bad", Corr)
   ) %>%
   select(pid)
 
-corr <- corr_all %>% 
+corr <- data %>% 
   anti_join(corr_log) %>% 
-  filter(abs(corr_z) < 3) %>% 
-  drop_na(liking, tas_z)
+  drop_na(liking, tas_z) %>% 
+  filter(abs(corr) < mean(corr, na.rm = TRUE) + 3*sd(corr, na.rm = TRUE)) 
 
 
-length(unique(corr$pid))
-# Model Responses ---------------------------------------------------------
+message(
+  paste0(nrow(data) - nrow(corr), " Observations removed out of ", nrow(data), " or ", round((nrow(data) - nrow(corr))/nrow(data)*100, 3), "%")
+)
+
+message(
+  paste0(length(unique(data$pid)) - length(unique(corr$pid)), " Observations removed")
+)
+
+message(
+  paste0("There are ", nrow(corr), " observations from ", length(unique(corr$pid)), " participants")
+)
 
 # Fit data to null model 
 
 corr_null <- lmerTest::lmer(
-  corr_pct ~ 1 + (1 | pid),
+  corr_z ~ 1 + (1 | pid),
+  data = corr,
+  REML = FALSE
+)
+
+corr_item <- lmerTest::lmer(
+  corr_z ~ 1 + (1 | pid) + (1 | song),
   data = corr,
   REML = FALSE
 )
 
 corr_rand <- lmerTest::lmer(
-  corr_pct ~ 1 + (1 | pid) + (1 | song),
+  corr_z ~ 1 + (1 + factor | pid) + (1 | song),
   data = corr,
   REML = FALSE
 )
 
-anova(corr_null, corr_rand) # null model is prefered
+anova(corr_null, corr_item, corr_rand) 
 
 # Random structure is best 
-# Model 1: Liking ------------------------------------------
 
 
-corr_1 <- update(
-  corr_null, 
-  . ~ . + liking
-)
-# Model 2: Add factor -----------------------------------------------------
-corr_2 <- update(
-  corr_1,
-  . ~ . + factor
-)
+# Model 1: Factor only ----------------------------------------------------
 
-# Model 4 Add interaction ------------------------------------------------
-
-corr_3 <- update(
-  corr_2,
-  . ~ . + liking:factor
-)
-# Model 5 add TAS ---------------------------------------------------------
-
-corr_4 <- update(
-  corr_3,
-  . ~ . + tas_z
+corr_factor <- update(
+  corr_item, 
+  . ~ . + factor, 
+  contrasts = list(factor = contr.sum)
 )
 
 
-corr_5 <- update(
-  corr_4,
-  . ~ . + tas_z:factor + tas_z:liking
-)
-# Model 6 add depression --------------------------------------------------
+# Model 2: Liking  --------------------------------------------------------
 
-corr_5 <- update(
-  corr_4,
-  . ~ . + depression_z 
-)
-
-corr_6 <- update(
-  corr_5,
-  . ~ . + depression_z:factor + depression_z:liking
+corr_liking <- update(
+  corr_factor, 
+  . ~ . + liking_z + liking_z : factor
 )
 
 
-# LRT of model fit ------------------------------------------------------
+# Model 3: Alexithymia ----------------------------------------------------
 
-anova(corr_1, corr_2, corr_3, corr_4, corr_5, corr_6)
-
-# ANOVA of Model 3 --------------------------------------------------------
-
-apa_f(corr_1)
-
-
-# Simple slopes analysis --------------------------------------------------
-
-# Plot --------------------------------------------------------------------
-
-corr_plot <- emmeans::emmip(
-  corr_1,
-  ~ liking,
-  CIs = TRUE,
-  at = list(liking = c(-2, 0, 2))
-) +
-  scale_color_discrete(name = "") +
-  ylab("Predicted corr") +
-  xlab("Song liking") +
-  ggplot2::theme_classic() +
-  ggtitle("A")
+corr_tas <- update(
+  corr_liking, 
+  . ~ . + tas_z + factor : tas_z
+)
 
 
+# Model 4: Three way ------------------------------------------------------
+
+corr_all <- update(
+  corr_tas,
+  . ~ . + factor : tas_z : liking_z
+)
+
+
+# Compare Models ----------------------------------------------------------
+
+anova(corr_factor, 
+      corr_liking, 
+      corr_tas, 
+      corr_all) %>% 
+  apa_lrt(caption = "Model comparison: corr")
+
+# Follow up model ---------------------------------------------------------
+
+apa_f(corr_factor, 
+      caption = "Type 3 ANOVA table for best fitting corr model")
+
+## Get main effect
+
+corr_main <- emmeans::emmeans(corr_factor, 
+                              pairwise ~ factor,
+                              infer = TRUE)
+
+corr_est <- as.data.frame(corr_main$emmeans)
+
+corr_est %>%  
+  transmute(
+    `Song target affect` = corr_est[,1],
+    trend_CI = glue::glue("Est = {round(corr_est[,2], 2)},  95% CI [{round(lower.CL, 2)}, {round(upper.CL, 2)}]")
+  ) %>% 
+  kableExtra::kable() %>% 
+  kableExtra::kable_styling()
+
+corr_main$contrasts

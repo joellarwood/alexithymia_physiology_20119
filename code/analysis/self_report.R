@@ -20,15 +20,14 @@ data <- here::here(
   mutate(
     liking = liking - 3
   ) %>% 
-  drop_na(liking)
-
+  drop_na(liking, tas_z)
 
 # Model Valence -----------------------------------------------------------
 
 ## Factors only
 
 v_1 <- lmerTest::lmer(
-  valence_rating ~ arousal_target + valence_target + liking + (1 + arousal_target * valence_target | pid) + (1 | song),
+  valence_rating ~ arousal_target + valence_target + liking + (1 + arousal_target + valence_target | pid) + (1 | song),
   data = data,
   contrasts = list(
     valence_target = contr.sum,
@@ -50,11 +49,6 @@ v_3 <- update(
   . ~ . + tas_z + tas_z * arousal_target + tas_z * valence_target
 )
 
-## ANOVA of models 
-anova(
-  v_1, v_2, v_3
-)
-
 
 ## Compare models
 sapply(
@@ -74,17 +68,17 @@ sapply(
     AICdiff = AIC - AIC(v_3)
   )
 
-## Model v_4 is best model 
+## Model v_3 is best model 
 
 apa_f(
-  v_2
+  v_3
 )
 
 
 # Follow up selected valence model ----------------------------------------
 
 emmeans::emtrends(
-  v_2,
+  v_3,
   pairwise ~ valence_target,
   var = "liking",
   infer = TRUE
@@ -118,17 +112,15 @@ a_3 <- update(
   . ~ . + tas_z + tas_z * arousal_target + tas_z * valence_target
 )
 
-## ANOVA of models 
-anova(
-  a_1, a_2, a_3
+a_4 <- update(
+  a_3,
+  . ~ . + depression_z * arousal_target + depression_z * valence_target
 )
-
-
 ## Compare models
 sapply(
   paste0(
     "a_",
-    c(1:3)
+    c(1:4)
   ),
   function(x) {
     AIC(get(x))
@@ -139,13 +131,13 @@ sapply(
     AIC = "."
   ) %>% 
   mutate(
-    AICdiff = AIC - AIC(a_3)
+    AICdiff = AIC - AIC(a_4)
   )
 
 ## Model a_4 is best model 
 
 apa_f(
-  a_2
+  a_3
 )
 
 ## Model arousal by liking

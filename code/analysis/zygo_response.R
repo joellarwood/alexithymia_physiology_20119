@@ -13,134 +13,155 @@ source("code/apa_f.r")
 
 # Import Data -------------------------------------------------------------
 
-zygo_all <-here::here(
+data <-here::here(
   "data",
   "all_data.Rds"
 ) %>%
-  read_rds() %>%
-  mutate(
-    liking = liking - 3
-  ) 
+  read_rds() 
 
 zygo_log <- here::here(
   "data",
   "log.csv"
 ) %>%
   read_csv() %>%
-  rename(
-    pid = P
+  mutate(
+    pid = as.factor(P)
   ) %>% 
   filter(
     grepl("bad", Zygo)
   ) %>%
   select(pid)
 
-zygo <- zygo_all %>% 
+zygo <- data %>% 
   anti_join(zygo_log) %>% 
-  filter(abs(zygo_z) < 3) %>% 
-  drop_na(liking, tas_z)
+  drop_na(liking, tas_z) %>% 
+  filter(abs(corr) < mean(corr, na.rm = TRUE) + 3*sd(corr, na.rm = TRUE)) 
 
+message(
+  paste0(nrow(data) - nrow(zygo), " Observations removed out of ", nrow(data), " or ", round((nrow(data) - nrow(zygo))/nrow(data)*100, 3), "%")
+)
 
-length(unique(zygo$pid))
-# Model Responses ---------------------------------------------------------
+message(
+  paste0(length(unique(data$pid)) - length(unique(zygo$pid)), " Observations removed")
+)
+
+message(
+  paste0("There are ", nrow(zygo), " observations from ", length(unique(zygo$pid)), " participants")
+)
 
 # Fit data to null model 
 
 zygo_null <- lmerTest::lmer(
-  zygo_pct ~ 1 + (1 | pid),
+  zygo_z ~ 1 + (1 | pid),
+  data = zygo,
+  REML = FALSE
+)
+
+zygo_item <- lmerTest::lmer(
+  zygo_z ~ 1 + (1 | pid) + (1 | song),
   data = zygo,
   REML = FALSE
 )
 
 zygo_rand <- lmerTest::lmer(
-  zygo_pct ~ 1 + (1 | pid) + (1 | song),
+  zygo_z ~ 1 + (1 + factor | pid) + (1 | song),
   data = zygo,
   REML = FALSE
 )
 
-anova(zygo_null, zygo_rand)
+anova(zygo_null, zygo_item, zygo_rand) # random model is prefered
 
 # Random structure is best 
-# Model 1: Liking ------------------------------------------
 
 
-zygo_1 <- update(
-  zygo_null, 
-  . ~ . + liking
-)
-# Model 2: Add factor -----------------------------------------------------
-zygo_2 <- update(
-  zygo_1,
-  . ~ . + factor
-)
+# Model 1: Factor only ----------------------------------------------------
 
-# Model 4 Add interaction ------------------------------------------------
-
-zygo_3 <- update(
-  zygo_2,
-  . ~ . + liking:factor
-)
-# Model 5 add TAS ---------------------------------------------------------
-
-zygo_4 <- update(
-  zygo_3,
-  . ~ . + tas_z
+zygo_factor <- update(
+  zygo_item, 
+  . ~ . + factor, 
+  contrasts = list(factor = contr.sum)
 )
 
 
-zygo_5 <- update(
-  zygo_4,
-  . ~ . + tas_z:factor + tas_z:liking
-)
-# Model 6 add depression --------------------------------------------------
+# Model 2: Liking  --------------------------------------------------------
 
-zygo_5 <- update(
-  zygo_4,
-  . ~ . + depression_z 
-)
-
-zygo_6 <- update(
-  zygo_5,
-  . ~ . + depression_z:factor + depression_z:liking
+zygo_liking <- update(
+  zygo_factor, 
+  . ~ . + liking_z + liking_z : factor
 )
 
 
-# LRT of model fit ------------------------------------------------------
+# Model 3: Alexithymia ----------------------------------------------------
 
-anova(zygo_1, zygo_2, zygo_3, zygo_4, zygo_5, zygo_6)
+zygo_tas <- update(
+  zygo_liking, 
+  . ~ . + tas_z + factor : tas_z
+)
 
-# ANOVA of Model 3 --------------------------------------------------------
 
-apa_f(zygo_3)
+# Model 4: Three way ------------------------------------------------------
 
-# Marginal Means Analysis -------------------------------------------------
+zygo_all <- update(
+  zygo_tas,
+  . ~ . + factor : tas_z : liking_z
+)
 
-emmeans::emmeans(
-  zygo_3,
+
+# Compare Models ----------------------------------------------------------
+
+anova(zygo_factor, 
+      zygo_liking, 
+      zygo_tas, 
+      zygo_all) %>% 
+  apa_lrt(caption = "Model comparison: zygo")
+
+# Follow up model ---------------------------------------------------------
+
+## Best model is the two way interaction with liking 
+
+apa_f(zygo_liking, 
+      caption = "Type 3 ANOVA table for best fitting zygo model")
+
+## Get main effect
+
+zygo_main <- emmeans::emmeans(zygo_factor, 
+                              pairwise ~ factor,
+                              infer = TRUE)
+
+apa_post_hoc(zygo_main, caption = "Affect category differences: Zygo")
+
+zygo_main %>% apa_post_hoc_contrast()
+
+# Follow up interactions ---------------------------------------------------
+
+## Two way interaction 
+### Liking
+
+zygo_liking_emmeans <- emmeans::emtrends(
+  zygo_liking, 
   pairwise ~ factor,
-  infer = TRUE)
-# Simple slopes analysis --------------------------------------------------
-
-emmeans::emtrends(
-  zygo_3,
-  pairwise ~ factor,
-  var = "liking",
+  var = "liking_z",
   infer = TRUE
 )
 
+apa_trends(zygo_liking_emmeans)
 
-# Plot --------------------------------------------------------------------
-
-zygo_plot <- emmeans::emmip(
-  zygo_3,
-  factor ~ liking,
-  CIs = TRUE,
-  at = list(liking = c(-2, 0, 2))
-) +
-  scale_color_discrete(name = "") +
-  ylab("Predicted Zygo") +
-  xlab("Song liking") +
-  ggplot2::theme_classic() +
-  ggtitle("A")
+zygo_liking_emmeans$contrasts
 
 
+
+# Discordance -------------------------------------------------------------
+
+zygo_discord <- lmerTest::lmer(
+  zygo_z ~ factor * valence_rating * liking + factor * tas_z * valence_rating + (1 | pid) + (1 | song),
+  data = zygo
+)
+
+emmeans::emmip(
+  zygo_discord,
+  at =  list(
+    valence_rating = c(-1, 0, 1),
+    liking = c(-1,0,1)
+  ),
+   valence_rating ~ liking |factor
+)

@@ -1,6 +1,6 @@
 
 #################################################################
-##                        Model Valence                        ##
+##                        Model valence                        ##
 #################################################################
 
 # Load packages -----------------------------------------------------------
@@ -17,107 +17,208 @@ data <- here::here(
   "data",
   "all_data.Rds"
 ) %>%
-  read_rds() %>%
-  mutate(
-    liking = liking - 3,
-    pid = as.factor(pid)
-  ) %>% 
-  drop_na(tas_z, liking)
+  read_rds()
+
+
 
 # Model Responses ---------------------------------------------------------
 
 
+# Fit data to null model 
 
-# Model 1: Liking ------------------------------------------
-
-
-valence_1 <- update(
-  lmerTest::lmer(
-    valence_rating ~ liking + (1 + factor | pid) + (1 | song),
-    data = data,
-    contrasts = list(factor = contr.sum),
-  ),
+valence_null <- lmerTest::lmer(
+  valence_rating ~ 1 + (1 | pid),
+  data = data,
   REML = FALSE
 )
 
-# Model 2: Add factor -----------------------------------------------------
-valence_2 <- update(
-  valence_1,
-  . ~ . + factor
+valence_item <- lmerTest::lmer(
+  valence_rating ~ 1 + (1 | pid) + (1 | song),
+  data = data,
+  REML = FALSE
 )
 
-# Model 4 Add interaction ------------------------------------------------
-
-valence_3 <- update(
-  valence_1,
-  . ~ . + liking:factor
+valence_rand <- lmerTest::lmer(
+  valence_rating ~ 1 + (1 + factor | pid) + (1 | song),
+  data = data,
+  REML = FALSE
 )
-# Model 5 add TAS ---------------------------------------------------------
 
-valence_4 <- update(
-  valence_3,
-  . ~ . + tas_z + tas_z:factor 
-) 
+anova(valence_null, valence_item, valence_rand) # random model is prefered
+
+# Random structure is best 
 
 
-# Model 6 add depression --------------------------------------------------
+# Model 1: Factor only ----------------------------------------------------
 
-valence_5 <- update(
-  valence_4,
-  . ~ . + depression_z + depression_z:factor 
-) 
-
-
-# Get conditional AIC -----------------------------------------------------
-
-v_tab <- AICcmodavg::aictab(
-  list(valence_1, valence_2, valence_3, valence_4, valence_5),
-  second.ord = TRUE,
-  sort = FALSE
-) 
-
-data.frame(v_tab) %>% 
-  mutate(
-    delta = round(Delta_AICc, 2)
-  ) %>% 
-  select(delta)
-
-AICcmodavg::evidence(v_tab, model.low = "Mod4") #evidence ratio for selected over TAS
-
-
-# ANOVA of Model 3 --------------------------------------------------------
-
-apa_f(valence_3)
-
-
-# Marginal Means Analysis -------------------------------------------------
-
-emmeans::emmeans(
-  valence_3,
-  pairwise ~ factor, 
-  infer = TRUE
+valence_factor <- update(
+  valence_rand, 
+  . ~ . + factor, 
+  contrasts = list(factor = contr.sum)
 )
-# Simple slopes analysis --------------------------------------------------
 
-emmeans::emtrends(
-  valence_3,
+
+# Model 2: Liking  --------------------------------------------------------
+
+valence_liking <- update(
+  valence_factor, 
+  . ~ . + liking_z + liking_z : factor
+)
+
+
+# Model 3: Alexithymia ----------------------------------------------------
+
+valence_tas <- update(
+  valence_liking, 
+  . ~ . + tas_z + factor : tas_z
+)
+
+
+# Model 4: Three way ------------------------------------------------------
+
+valence_all <- update(
+  valence_tas,
+  . ~ . + factor : tas_z : liking_z
+)
+
+
+# Compare Models ----------------------------------------------------------
+
+anova(valence_factor, 
+      valence_liking, 
+      valence_tas, 
+      valence_all) %>% 
+  apa_lrt(caption = "Model comparison: Valence")
+
+
+# Follow up model ---------------------------------------------------------
+
+## Best model is the three way interaction 
+
+apa_f(valence_all, 
+      caption = "Type 3 ANOVA table for best fitting valecne model")
+
+## Get main effect
+
+valence_main <- emmeans::emmeans(valence_all, 
+                                 pairwise ~ factor,
+                                 infer = TRUE)
+
+apa_post_hoc(valence_main, caption = "Affect category differences: Valence")
+
+valence_main %>% apa_post_hoc_contrast()
+
+# Follow up interactions ---------------------------------------------------
+
+## Two way interaction 
+### Liking
+
+valence_liking_emmeans <- emmeans::emtrends(
+  valence_all, 
   pairwise ~ factor,
-  var = "liking",
+  var = "liking_z"
+)
+
+apa_trends(valence_liking_emmeans)
+
+valence_liking_emmeans$contrasts
+
+### Alexithymia
+
+valence_tas_emmeans <- emmeans::emtrends(
+  valence_all, 
+  pairwise ~ factor,
+  var = "tas_z",
   infer = TRUE
 )
 
+apa_trends(valence_tas_emmeans)
 
-# Plot --------------------------------------------------------------------
+valence_tas_emmeans$contrasts
 
-v_plot <- emmeans::emmip(
-  valence_3,
-  factor ~ liking,
-  CIs = TRUE,
-  at = list(liking = c(-2, 2))
-) +
-  scale_color_discrete(name = "") +
-  ylab("Predicted Valence") + 
-  xlab("Song liking") +
-  ggplot2::theme_classic() + 
-  ggtitle("A")
+## Three way interaction
 
+valence_simple_simple <- emmeans::emtrends(
+  valence_all,
+  pairwise ~ liking_z | factor,
+  at = list(liking_z = c(-1, 0, 1)),
+  var = "tas_z",
+  infer = TRUE)
+
+
+valence_simple_simple$emtrends %>% 
+  as.data.frame() %>% 
+  arrange(factor, liking_z) %>% 
+  distinct(factor, liking_z, .keep_all = TRUE) %>% 
+  mutate(
+    statistic = glue::glue("trend = {round(tas_z.trend, 2)}, p = {round(p.value, 3)}, 95% CI [{round(asymp.UCL, 2)}, {round(asymp.LCL, 2)}]")
+  ) %>% 
+  select(factor, liking_z, statistic) %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_styling()
+
+
+valence_simple_simple$contrasts %>% 
+  as.data.frame() %>% 
+  arrange(contrast) %>% 
+  tidyr::separate(contrast, 
+                  into = c("ref", "contr"),
+                  sep = " - ") %>% 
+  tidyr::separate(ref,
+                  into = c("Liking", "Tas"),
+                  sep = "\\s") %>% 
+  tidyr::separate(contr,
+                  into = c("Liking.c", "Tas.c"),
+                  sep = "\\s") %>% 
+#  filter(factor == "Negative/High") %>% 
+  arrange(factor, Liking) %>% 
+  select(
+    contains(c(
+      "factor",
+      "Liking",
+      "Tas",
+      "p.value")
+    )
+  ) %>% 
+  filter(p.value < .05)
+
+plot_valence_3way <- emmeans::emmip(
+  valence_all,
+  liking_z ~ tas_z | factor, 
+  at = list(
+    tas_z = c(-1, 0, 1), 
+    liking_z = c(-1, 0, 1)
+  ),
+  plotit = FALSE
+) %>% 
+  mutate(
+    tas_z = as.factor(tas_z),
+    factor = recode(factor,
+                    "Positive/High" = "Happy", 
+                    "Positive/Low" = "Tender",
+                    "Negative/High" = "Fear",
+                    "Negative/Low" = "Sad"
+    )
+  ) %>% 
+  ggplot2::ggplot(
+    aes(
+      x = liking_z,
+      y = yvar,
+      color = tas_z,
+      group = tas_z
+    )
+  ) + 
+  geom_path() +
+  facet_wrap(~factor) +
+  ylim(-2, 2) +
+  labs(
+    x = "Song liking (Z transformed)",
+    y = "Rated Valence",
+    color = "Alexithymia \n(Z transformed)"
+  ) +
+  theme_classic() +
+  theme(text=element_text(family="Times New Roman", face="bold", size=12))
+
+ggsave("output/plot/valence_3way.svg", height = 10, width = 15, units = "cm")  
+
+  

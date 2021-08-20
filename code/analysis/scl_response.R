@@ -13,42 +13,42 @@ source("code/apa_f.r")
 
 # Import Data -------------------------------------------------------------
 
-tonic_all <-here::here(
+data <-here::here(
   "data",
   "all_data.Rds"
 ) %>%
-  read_rds() %>%
-  mutate(
-    liking = liking - 3
-  ) %>% 
-  filter(
-    abs(tonic_z) < 3
-  )
+  read_rds() 
 
 tonic_log <- here::here(
   "data",
   "log.csv"
 ) %>%
   read_csv() %>%
-  rename(
-    pid = P
+  mutate(
+    pid = as.factor(P)
   ) %>% 
   filter(
     grepl("bad", Eda)
   ) %>%
   select(pid)
 
-tonic <- tonic_all %>% 
+tonic <- data %>% 
   anti_join(tonic_log) %>% 
-  filter(abs(tonic_z) < 3) %>% 
   drop_na(liking, tas_z) %>% 
-  mutate(
-    log_scl = log(tonic + 1)
-  ) 
+  filter(abs(tonic) < mean(tonic, na.rm = TRUE) + 3*sd(.$tonic, na.rm = TRUE)) 
 
 
-length(unique(tonic$pid))
-# Model Responses ---------------------------------------------------------
+message(
+  paste0(nrow(data) - nrow(tonic), " Observations removed out of ", nrow(data), " or ", round((nrow(data) - nrow(tonic))/nrow(data)*100, 3), "%")
+)
+
+message(
+  paste0(length(unique(data$pid)) - length(unique(tonic$pid)), " Observations removed")
+)
+
+message(
+  paste0("There are ", nrow(tonic), " observations from ", length(unique(tonic$pid)), " participants")
+)
 
 # Fit data to null model 
 
@@ -58,137 +58,189 @@ tonic_null <- lmerTest::lmer(
   REML = FALSE
 )
 
-tonic_rand <- lmerTest::lmer(
+tonic_item <- lmerTest::lmer(
   tonic ~ 1 + (1 | pid) + (1 | song),
   data = tonic,
   REML = FALSE
 )
 
-anova(tonic_null, tonic_rand) # null model is prefered
+tonic_rand <- lmerTest::lmer(
+  tonic ~ 1 + (1 + factor | pid) + (1 | song),
+  data = tonic,
+  REML = FALSE
+)
+
+anova(tonic_null, tonic_item, tonic_rand) # random model is prefered
 
 # Random structure is best 
-# Model 1: Liking ------------------------------------------
 
 
-tonic_1 <- update(
-  tonic_null, 
-  . ~ . + liking
-)
-# Model 2: Add factor -----------------------------------------------------
-tonic_2 <- update(
-  tonic_1,
-  . ~ . + factor
-)
+# Model 1: Factor only ----------------------------------------------------
 
-# Model 4 Add interaction ------------------------------------------------
-
-tonic_3 <- update(
-  tonic_2,
-  . ~ . + liking:factor
-)
-# Model 5 add TAS ---------------------------------------------------------
-
-tonic_4 <- update(
-  tonic_3,
-  . ~ . + tas_z
+tonic_factor <- update(
+  tonic_item, 
+  . ~ . + factor, 
+  contrasts = list(factor = contr.sum)
 )
 
 
-tonic_5 <- update(
-  tonic_4,
-  . ~ . + tas_z:factor + tas_z:liking
-)
-# Model 6 add depression --------------------------------------------------
+# Model 2: Liking  --------------------------------------------------------
 
-tonic_5 <- update(
-  tonic_4,
-  . ~ . + depression_z 
-)
-
-tonic_6 <- update(
-  tonic_5,
-  . ~ . + depression_z:factor + depression_z:liking
+tonic_liking <- update(
+  tonic_factor, 
+  . ~ . + liking_z + liking_z : factor
 )
 
 
-# LRT of model fit ------------------------------------------------------
+# Model 3: Alexithymia ----------------------------------------------------
 
-anova(tonic_1, tonic_2, tonic_3, tonic_4, tonic_5, tonic_6)
-
-# ANOVA of Model 3 --------------------------------------------------------
-
-apa_f(tonic_3)
-
+tonic_tas <- update(
+  tonic_liking, 
+  . ~ . + tas_z + factor : tas_z
+)
 
 
-# Estimated Marginal Means ------------------------------------------------
+# Model 4: Three way ------------------------------------------------------
 
-emmeans::emmeans(
-  tonic_3, 
-  pairwise ~ factor, 
+tonic_all <- update(
+  tonic_tas,
+  . ~ . + factor : tas_z : liking_z
+)
+
+
+# Compare Models ----------------------------------------------------------
+
+anova(tonic_factor, 
+      tonic_liking, 
+      tonic_tas, 
+      tonic_all) %>% 
+  apa_lrt(caption = "Model comparison: tonic")
+
+# Follow up model ---------------------------------------------------------
+
+
+apa_f(tonic_all, 
+      caption = "Type 3 ANOVA table for best fitting tonic model")
+
+## Get main effect
+
+tonic_main <- emmeans::emmeans(tonic_tas, 
+                              pairwise ~ factor,
+                              infer = TRUE)
+
+apa_post_hoc(tonic_main, caption = "Affect category differences: tonic")
+
+tonic_main %>% apa_post_hoc_contrast()
+
+# Follow up interactions ---------------------------------------------------
+
+## Two way interaction 
+### Liking
+
+tonic_liking_emmeans <- emmeans::emtrends(
+  tonic_all, 
+  pairwise ~ factor,
+  var = "liking_z",
   infer = TRUE
 )
 
+apa_trends(tonic_liking_emmeans)
 
+tonic_liking_emmeans$contrasts
 
-# Simple Slopes -----------------------------------------------------------
+### Alexithymia
 
-emmeans::emtrends(
-  tonic_3,
-  pairwise ~ factor, 
-  var = "liking"
-)
-# Plot --------------------------------------------------------------------
-
-tonic_plot <- emmeans::emmip(
-  tonic_3,
-  factor ~ liking,
-  CIs = TRUE,
-  at = list(liking = c(-2, 0 , 2))
-) 
-
-
-# Discordance -------------------------------------------------------------
-
-discordacne_null <- lmerTest::lmer(
-  arousal_rating ~ 1 + (1 | pid),
-  data = tonic,
-  REML = FALSE
+tonic_tas_emmeans <- emmeans::emtrends(
+  tonic_all, 
+  pairwise ~ factor,
+  var = "tas_z",
+  infer = TRUE
 )
 
-discordance_random <- lmerTest::lmer(
-  arousal_rating ~ 1 + (1 + factor | pid) + (1 | song),
-  data = tonic,
-  REML = FALSE
-)
-anova(discordacne_null, discordance_random) # random is better
+apa_trends(tonic_tas_emmeans)
 
-discordance_1 <- update(
-  discordance_random, 
-  . ~ . + tonic
-)
+tonic_tas_emmeans$contrasts
 
-discordance_2 <- update(
-  discordance_1, 
-  . ~ . + tonic:liking
-)
+## Three way interaction
 
-discordance_3 <- update(
-  discordance_2,
-  . ~ . + tas_z
-) 
-
-discordance_4 <- update(
-  discordance_3, 
-  . ~ . + tas_z:tonic + tas_z:liking
-)
-
-anova(discordance_1, discordance_2, discordance_3, discordance_4)
+tonic_simple_simple <- emmeans::emtrends(
+  tonic_all,
+  pairwise ~ liking_z | factor,
+  at = list(liking_z = c(-1, 0, 1)),
+  var = "tas_z",
+  infer = TRUE)
 
 
-emmip(
-  discordance_4,
-  tas_z ~ liking, 
-  at = list(liking = c(-2, 0, 2),
-            tas_z = c(-1, 0, 1))
-)
+tonic_simple_simple$emtrends %>% 
+  as.data.frame() %>% 
+  arrange(factor, liking_z) %>% 
+  distinct(factor, liking_z, .keep_all = TRUE) %>% 
+  mutate(
+    statistic = glue::glue("trend = {round(tas_z.trend, 2)}, p = {round(p.value, 3)}, 95% CI [{round(asymp.UCL, 2)}, {round(asymp.LCL, 2)}]")
+  ) %>% 
+  select(factor, liking_z, statistic) %>% 
+  knitr::kable() %>% 
+  kableExtra::kable_styling()
+
+
+tonic_simple_simple$contrasts %>% 
+  as.data.frame() %>% 
+  arrange(contrast) %>% 
+  tidyr::separate(contrast, 
+                  into = c("ref", "contr"),
+                  sep = " - ") %>% 
+  tidyr::separate(ref,
+                  into = c("Liking", "Tas"),
+                  sep = "\\s") %>% 
+  tidyr::separate(contr,
+                  into = c("Liking.c", "Tas.c"),
+                  sep = "\\s") %>% 
+  arrange(factor, Liking) %>% 
+  # select(
+  #   contains(c(
+  #     "factor",
+  #     "Liking",
+  #     "Tas",
+  #     "p.value")
+  #   )
+  # ) %>% 
+  filter(p.value < .05)
+
+plot_tonic_3way <- emmeans::emmip(
+  tonic_all,
+  liking_z ~ tas_z | factor, 
+  at = list(
+    tas_z = c(-1, 0, 1), 
+    liking_z = c(-1, 0, 1)
+  ),
+  plotit = FALSE
+) %>% 
+  mutate(
+    tas_z = as.factor(tas_z),
+    factor = recode(factor,
+                    "Positive/High" = "Happy", 
+                    "Positive/Low" = "Tender",
+                    "Negative/High" = "Fear",
+                    "Negative/Low" = "Sad"
+    )
+  ) %>% 
+  ggplot2::ggplot(
+    aes(
+      x = liking_z,
+      y = yvar,
+      color = tas_z,
+      group = tas_z
+    )
+  ) + 
+  geom_path() +
+  facet_wrap(~factor)+
+  ylim(-.3, .1) +
+  labs(
+    x = "Song liking (Z transformed)",
+    y = "Rated tonic",
+    color = "Alexithymia \n(Z transformed)"
+  ) +
+  theme_classic() +
+  theme(text=element_text(family="Times New Roman", face="bold", size=12))
+
+ggsave("output/plot/tonic_3way.svg", height = 10, width = 15, units = "cm")

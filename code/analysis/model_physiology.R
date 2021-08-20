@@ -40,24 +40,49 @@ log <- here::here(
 
 # Create data -------------------------------------------------------------
 
-bad_zyg <- log %>% 
-  filter(!is.na(Zygo)) %>% 
-  select(pid) 
+# Remove bad recordings ---------------------------------------------------
 
-outlier_zygo <- filter(data,
-                       zygo_z > 3 | zygo_z < -3
-) %>% 
-  select(id_trial, zygo_z)
 
+bad_zygo <- log %>% 
+  filter(grepl("bad", Zygo)) %>% 
+  transmute(
+    pid =
+  )
 
 zygo_subset <- data %>% 
   drop_na(zygo) %>% 
-  anti_join(bad_zyg,
-            by = "pid") %>% 
-  anti_join(outlier_zygo,
-            by = "id_trial") 
+  anti_join(bad_zygo, 
+            by = "pid")
 
 length(unique(zygo_subset$pid))
+
+# Z score outliers --------------------------------------------------------
+
+outlier_zygo_z <- filter(zygo_subset,
+                       zygo_z < 3 & zygo_z > -3
+) %>% 
+  select(id_trial, zygo_z)  %>% 
+  left_join(zygo_subset, 
+            by = "id_trial") # data set of Z score zygo with outliers removed
+
+length(unique(outlier_zygo_z$pid))
+
+# Raw score outliers ------------------------------------------------------
+outlier_zygo_raw_val <- boxplot(zygo_subset$zygo)$out %>% 
+  as.data.frame() %>% 
+  rename(
+    zygo = "."
+  ) # data frame of outlier raw zygo numbers 
+
+outlier_zygo_raw <- zygo_subset %>% 
+  anti_join(
+    outlier_zygo_raw_val,
+    bt = "zygo"
+  ) # data frame with raw score outliers removed
+
+length(unique(outlier_zygo_raw$pid))
+
+
 
 # Inspect data ------------------------------------------------------------
 
@@ -65,11 +90,11 @@ length(unique(zygo_subset$pid))
 # Fit models --------------------------------------------------------------
 
 zygo_1 <- lmerTest::lmer(
-  zygo_z ~ arousal_target + valence_target + liking + (1 | pid),
-  data = zygo_subset,
+  zygo_z ~ affect_label + liking + (1 | pid) + (1 | song),
+  data = outlier_zygo_raw,
   contrasts = list(
-    valence_target = contr.sum,
-    arousal_target = contr.sum
+    arousal_target = contr.sum,
+    valence_target = contr.sum
   ),
   REML = FALSE
 )
@@ -77,12 +102,12 @@ zygo_1 <- lmerTest::lmer(
 
 zygo_2 <- update(
   zygo_1,
-  . ~ . + arousal_target * valence_target + arousal_target * liking + valence_target * liking
+  . ~ . + affect_label * liking
 )
 
 zygo_3 <- update(
   zygo_2, 
-  . ~ . + tas_z * arousal_target + tas_z * valence_target
+  . ~ . + tas_z * affect_label
 )
 
 ## Compare models
